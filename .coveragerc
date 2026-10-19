@@ -1,0 +1,6 @@
+[run]
+source = users
+omit =
+    */tests.py
+    */tests/*
+    */migrations/*
