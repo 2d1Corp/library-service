@@ -35,3 +35,25 @@ class UserRegistrationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(get_user_model().objects.count(), 1)
         self.assertNotIn("password", response.json())
+
+        user = get_user_model().objects.get(email=payload["email"])
+
+        self.assertTrue(user.check_password(payload["password"]))
+
+    def test_rejects_duplicate_email(self):
+        get_user_model().objects.create_user(
+            email="test@example.com",
+            password="secret123",
+        )
+
+        response = self.client.post(
+            reverse("users:create"),
+            {
+                "email": "test@example.com",
+                "password": "another123",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(get_user_model().objects.count(), 1)
