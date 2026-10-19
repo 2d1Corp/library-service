@@ -9,5 +9,5 @@ class User(AbstractUser):
     email = models.EmailField(unique=True)
     objects = UserManager()
 
-    USERNAME_FIELD = 'email'
+    USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []
