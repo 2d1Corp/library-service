@@ -112,7 +112,7 @@ class UserProfileTests(APITestCase):
 
         self.assertEqual(
             response.status_code,
-            status.HTTP_403_FORBIDDEN,
+            status.HTTP_401_UNAUTHORIZED,
         )
 
     def test_cannot_promote_self(self):
@@ -134,3 +134,81 @@ class UserProfileTests(APITestCase):
         self.assertEqual(self.user.first_name, "Oleksandr")
         self.assertFalse(self.user.is_staff)
         self.assertFalse(self.user.is_superuser)
+
+    def test_authenticates_with_jwt(self):
+        token_response = self.client.post(
+            reverse("users:token"),
+            {
+                "email": self.user.email,
+                "password": "secret123",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            token_response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        access_token = token_response.json()["access"]
+
+        self.client.credentials(
+            HTTP_AUTHORIZE=f"Bearer {access_token}",
+        )
+
+        response = self.client.get(reverse("users:me"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["id"], self.user.id)
+
+    def test_rejects_invalid_credentials(self):
+        response = self.client.post(
+            reverse("users:token"),
+            {
+                "email": self.user.email,
+                "password": "wrong-password",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertNotIn("access", response.json())
+        self.assertNotIn("refresh", response.json())
+
+    def test_refreshes_access_token(self):
+        token_response = self.client.post(
+            reverse("users:token"),
+            {
+                "email": self.user.email,
+                "password": "secret123",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            token_response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        refresh_token = token_response.json()["refresh"]
+
+        refresh_response = self.client.post(
+            reverse("users:token-refresh"),
+            {"refresh": refresh_token},
+            format="json",
+        )
+
+        self.assertEqual(
+            refresh_response.status_code,
+            status.HTTP_200_OK,
+        )
+        access_token = refresh_response.json()["access"]
+
+        self.client.credentials(
+            HTTP_AUTHORIZE=f"Bearer {access_token}",
+        )
+
+        response = self.client.get(reverse("users:me"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["id"], self.user.id)
