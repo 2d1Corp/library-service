@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.test import TestCase
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -212,3 +213,38 @@ class UserProfileTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.json()["id"], self.user.id)
+
+
+class UserManagerTests(TestCase):
+    def test_rejects_missing_email(self):
+        with self.assertRaises(ValueError):
+            get_user_model().objects.create_user(
+                email="",
+                password="secret123",
+            )
+
+    def test_creates_superuser(self):
+        user = get_user_model().objects.create_superuser(
+            email="admin@example.com",
+            password="secret123",
+        )
+
+        self.assertTrue(user.is_staff)
+        self.assertTrue(user.is_superuser)
+        self.assertTrue(user.check_password("secret123"))
+
+    def test_rejects_superuser_without_staff_status(self):
+        with self.assertRaises(ValueError):
+            get_user_model().objects.create_superuser(
+                email="admin@example.com",
+                password="secret123",
+                is_staff=False,
+            )
+
+    def test_rejects_superuser_without_superuser_status(self):
+        with self.assertRaises(ValueError):
+            get_user_model().objects.create_superuser(
+                email="admin@example.com",
+                password="secret123",
+                is_superuser=False,
+            )
