@@ -1,5 +1,7 @@
 [run]
-source = users
+source =
+    users
+    books
 omit =
     */tests.py
     */tests/*
