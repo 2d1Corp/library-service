@@ -7,7 +7,7 @@ REST API for managing a library. Currently implements user accounts and book cat
 - User registration with email and password
 - JWT authentication with access and refresh tokens
 - Viewing and updating your own profile
-- Book catalog CRUD (currently available to staff users only)
+- Public book list and detail; staff-only creation, updates, and deletion
 - OpenAPI schema and Swagger UI
 
 ## Local setup (PowerShell)
@@ -30,7 +30,7 @@ python -c "from pathlib import Path; from django.core.management.utils import ge
 
 Run this once during initial setup: it replaces the contents of `.env`. The file is ignored by Git; `.env.example` documents the required variable without a real secret.
 
-Apply migrations and create a superuser to access the staff-only book endpoints:
+Apply migrations and create a superuser to create, update, and delete books:
 
 ```powershell
 python manage.py migrate
@@ -46,7 +46,7 @@ Open [Swagger UI](http://127.0.0.1:8000/api/docs/) after starting the server. Th
 
 To authenticate:
 
-1. Send your email and password to `POST /api/users/token/` to obtain access and refresh tokens. Use the superuser account created above to try the book endpoints.
+1. Send your email and password to `POST /api/users/token/` to obtain access and refresh tokens. Use the superuser account created above to create, update, and delete books.
 2. Send the access token in the following header for protected requests:
 
    ```text
@@ -56,7 +56,9 @@ To authenticate:
    The configured header name is `Authorize`. In Swagger UI, click **Authorize** and enter the access token; the bearer prefix is added automatically.
 3. Send the refresh token to `POST /api/users/token/refresh/` to obtain a new access token.
 
-Regular accounts can register at `POST /api/users/` and access their own profile at `/api/users/me/`. All book operations currently require `is_staff=True`.
+Regular accounts can register at `POST /api/users/` and access their own profile at `/api/users/me/`.
+
+Anyone can list and retrieve books without authentication. Creating, updating, and deleting books requires an authenticated staff user.
 
 ## Book fields
 

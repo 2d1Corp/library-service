@@ -210,3 +210,203 @@ class BookApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(Book.objects.count(), 0)
+
+    def test_regular_user_cannot_create_book(self):
+        self.create_book()
+
+        user = get_user_model().objects.create_user(
+            email="reader@example.com",
+            password="testpass123",
+        )
+        self.client.force_authenticate(user=user)
+
+        payload = {
+            "title": "Dune",
+            "author": "Frank Herbert",
+            "cover": "SOFT",
+            "inventory": 5,
+            "daily_fee": "4.00",
+        }
+
+        response = self.client.post(
+            reverse("book-list"),
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(Book.objects.count(), 1)
+
+    def test_anonymous_user_can_list_books(self):
+        book = self.create_book()
+        self.client.force_authenticate(user=None)
+
+        response = self.client.get(reverse("book-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()[0]["id"], book.id)
+
+    def test_anonymous_user_can_retrieve_book(self):
+        book = self.create_book()
+        self.client.force_authenticate(user=None)
+
+        response = self.client.get(reverse("book-detail", args=[book.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["id"], book.id)
+
+    def test_regular_user_cannot_update_book(self):
+        book = self.create_book()
+        user = get_user_model().objects.create_user(
+            email="reader@example.com",
+            password="testpass123",
+        )
+        self.client.force_authenticate(user=user)
+
+        response = self.client.patch(
+            reverse("book-detail", args=[book.id]),
+            {"inventory": 0},
+            format="json",
+        )
+
+        book.refresh_from_db()
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(book.inventory, 3)
+
+    def test_regular_user_cannot_delete_book(self):
+        book = self.create_book()
+        user = get_user_model().objects.create_user(
+            email="reader@example.com",
+            password="testpass123",
+        )
+        self.client.force_authenticate(user=user)
+
+        response = self.client.delete(
+            reverse("book-detail", args=[book.id]),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(Book.objects.filter(pk=book.id).exists(), True)
+
+    def test_anonymous_user_cannot_create_book(self):
+        self.create_book()
+        self.client.force_authenticate(user=None)
+
+        payload = {
+            "title": "Dune",
+            "author": "Frank Herbert",
+            "cover": "SOFT",
+            "inventory": 5,
+            "daily_fee": "4.00",
+        }
+
+        response = self.client.post(
+            reverse("book-list"),
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(Book.objects.count(), 1)
+
+    def test_anonymous_user_cannot_update_book(self):
+        book = self.create_book()
+        self.client.force_authenticate(user=None)
+
+        response = self.client.patch(
+            reverse("book-detail", args=[book.id]),
+            {"inventory": 0},
+            format="json",
+        )
+
+        book.refresh_from_db()
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(book.inventory, 3)
+
+    def test_anonymous_user_cannot_delete_book(self):
+        book = self.create_book()
+        self.client.force_authenticate(user=None)
+
+        response = self.client.delete(
+            reverse("book-detail", args=[book.id]),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(Book.objects.filter(pk=book.id).exists(), True)
+
+    def test_anonymous_user_cannot_replace_book(self):
+        book = self.create_book()
+        self.client.force_authenticate(user=None)
+
+        payload = {
+            "title": "Dune",
+            "author": "Frank Herbert",
+            "cover": "SOFT",
+            "inventory": 5,
+            "daily_fee": "4.00",
+        }
+
+        response = self.client.put(
+            reverse("book-detail", args=[book.id]),
+            payload,
+            format="json",
+        )
+
+        book.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(book.title, "The Hobbit")
+        self.assertEqual(book.inventory, 3)
+
+    def test_regular_user_cannot_replace_book(self):
+        book = self.create_book()
+        user = get_user_model().objects.create_user(
+            email="reader@example.com",
+            password="testpass123",
+        )
+        self.client.force_authenticate(user=user)
+
+        payload = {
+            "title": "Dune",
+            "author": "Frank Herbert",
+            "cover": "SOFT",
+            "inventory": 5,
+            "daily_fee": "4.00",
+        }
+        response = self.client.put(
+            reverse("book-detail", args=[book.id]),
+            payload,
+            format="json",
+        )
+
+        book.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(book.title, "The Hobbit")
+        self.assertEqual(book.inventory, 3)
+
+    def test_regular_user_can_list_books(self):
+        book = self.create_book()
+        user = get_user_model().objects.create_user(
+            email="reader@example.com",
+            password="testpass123",
+        )
+        self.client.force_authenticate(user=user)
+
+        response = self.client.get(reverse("book-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()[0]["id"], book.id)
+
+    def test_regular_user_can_retrieve_book(self):
+        book = self.create_book()
+        user = get_user_model().objects.create_user(
+            email="reader@example.com",
+            password="testpass123",
+        )
+        self.client.force_authenticate(user=user)
+
+        response = self.client.get(reverse("book-detail", args=[book.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["id"], book.id)
