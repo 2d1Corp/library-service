@@ -163,20 +163,6 @@ class BorrowingApiTests(APITestCase):
             status.HTTP_401_UNAUTHORIZED,
         )
 
-    def test_regular_user_cannot_list_borrowings(self):
-        user = get_user_model().objects.create_user(
-            email="reader@example.com",
-            password="testpass123",
-        )
-        self.client.force_authenticate(user=user)
-
-        response = self.client.get(reverse("borrowing-list"))
-
-        self.assertEqual(
-            response.status_code,
-            status.HTTP_403_FORBIDDEN,
-        )
-
     def test_anonymous_user_cannot_retrieve_borrowing(self):
         self.client.force_authenticate(user=None)
 
@@ -187,22 +173,6 @@ class BorrowingApiTests(APITestCase):
         self.assertEqual(
             response.status_code,
             status.HTTP_401_UNAUTHORIZED,
-        )
-
-    def test_regular_user_cannot_retrieve_borrowing(self):
-        user = get_user_model().objects.create_user(
-            email="reader@example.com",
-            password="testpass123",
-        )
-        self.client.force_authenticate(user=user)
-
-        response = self.client.get(
-            reverse("borrowing-detail", args=[self.borrowing.id]),
-        )
-
-        self.assertEqual(
-            response.status_code,
-            status.HTTP_403_FORBIDDEN,
         )
 
     def test_write_methods_are_not_allowed(self):
@@ -379,3 +349,179 @@ class BorrowingApiTests(APITestCase):
         self.book.refresh_from_db()
         self.assertEqual(self.book.inventory, 3)
         self.assertEqual(Borrowing.objects.count(), 1)
+
+
+class BorrowingAccessTests(APITestCase):
+    def setUp(self):
+        self.staff = get_user_model().objects.create_user(
+            email="admin@example.com",
+            password="testpass123",
+            is_staff=True,
+        )
+        self.reader = get_user_model().objects.create_user(
+            email="first@example.com",
+            password="testpass123",
+        )
+        self.other_reader = get_user_model().objects.create_user(
+            email="second@example.com",
+            password="testpass123",
+        )
+
+        self.book = Book.objects.create(
+            title="The Hobbit",
+            author="J. R. R. Tolkien",
+            cover=Book.CoverType.HARD,
+            inventory=3,
+            daily_fee="2.50",
+        )
+
+        self.own_active = self.create_borrowing(self.reader)
+        self.own_returned = self.create_borrowing(
+            self.reader,
+            returned=True,
+        )
+        self.other_active = self.create_borrowing(self.other_reader)
+
+        self.client.force_authenticate(user=self.reader)
+        self.list_url = reverse("borrowing-list")
+
+    def create_borrowing(self, user, returned=False):
+        return Borrowing.objects.create(
+            user=user,
+            book=self.book,
+            expected_return_date=timezone.localdate() + timedelta(days=7),
+            actual_return_date=timezone.localdate() if returned else None,
+        )
+
+    def response_ids(self, response):
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return {item["id"] for item in response.json()}
+
+    def test_regular_user_lists_only_own_borrowings(self):
+        response = self.client.get(self.list_url)
+
+        self.assertEqual(
+            self.response_ids(response),
+            {self.own_active.id, self.own_returned.id},
+        )
+
+    def test_regular_user_retrieves_own_borrowing(self):
+        response = self.client.get(
+            reverse("borrowing-detail", args=[self.own_active.id]),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["id"], self.own_active.id)
+
+    def test_regular_user_cannot_retrieve_another_users_borrowing(self):
+        response = self.client.get(
+            reverse("borrowing-detail", args=[self.other_active.id]),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_regular_user_cannot_select_another_user(self):
+        response = self.client.get(
+            self.list_url,
+            {"user_id": self.other_reader.id},
+        )
+
+        self.assertEqual(
+            self.response_ids(response),
+            {self.own_active.id, self.own_returned.id},
+        )
+
+    def test_regular_user_filters_active_borrowings(self):
+        response = self.client.get(
+            self.list_url,
+            {"is_active": "true"},
+        )
+
+        self.assertEqual(
+            self.response_ids(response),
+            {self.own_active.id},
+        )
+
+    def test_regular_user_filters_returned_borrowings(self):
+        response = self.client.get(
+            self.list_url,
+            {"is_active": "false"},
+        )
+
+        self.assertEqual(
+            self.response_ids(response),
+            {self.own_returned.id},
+        )
+
+    def test_staff_lists_all_borrowings(self):
+        self.client.force_authenticate(user=self.staff)
+
+        response = self.client.get(self.list_url)
+
+        self.assertEqual(
+            self.response_ids(response),
+            {
+                self.own_active.id,
+                self.own_returned.id,
+                self.other_active.id,
+            },
+        )
+
+    def test_staff_filters_by_user_and_active_status(self):
+        self.client.force_authenticate(user=self.staff)
+
+        response = self.client.get(
+            self.list_url,
+            {
+                "user_id": self.reader.id,
+                "is_active": "true",
+            },
+        )
+
+        self.assertEqual(
+            self.response_ids(response),
+            {self.own_active.id},
+        )
+
+    def test_rejects_invalid_active_filter(self):
+        response = self.client.get(
+            self.list_url,
+            {"is_active": "wrong"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("is_active", response.json())
+
+    def test_staff_rejects_invalid_user_filter(self):
+        self.client.force_authenticate(user=self.staff)
+
+        for value in ("wrong", "0", "-1"):
+            with self.subTest(user_id=value):
+                response = self.client.get(
+                    self.list_url,
+                    {"user_id": value},
+                )
+
+                self.assertEqual(
+                    response.status_code,
+                    status.HTTP_400_BAD_REQUEST,
+                )
+                self.assertIn("user_id", response.json())
+
+    def test_staff_filter_for_missing_user_returns_empty_list(self):
+        self.client.force_authenticate(user=self.staff)
+        missing_id = (
+            max(
+                self.staff.id,
+                self.reader.id,
+                self.other_reader.id,
+            )
+            + 1
+        )
+
+        response = self.client.get(
+            self.list_url,
+            {"user_id": missing_id},
+        )
+
+        self.assertEqual(self.response_ids(response), set())

@@ -9,7 +9,8 @@ REST API for managing a library. Currently implements user accounts, book catalo
 - Viewing and updating your own profile
 - Public book list and detail; staff-only creation, updates, and deletion
 - Authenticated borrowing creation with atomic inventory updates
-- Staff-only borrowing list and detail with nested book data
+- Borrowing list and detail with nested book data: users see their own records, staff see all
+- Borrowing filters by active status; staff can also filter by user ID
 - Borrowing date constraints and protection against deleting related books or users
 - OpenAPI schema and Swagger UI
 
@@ -79,18 +80,32 @@ Anyone can list and retrieve books without authentication. Creating, updating, a
 | Method | Endpoint | Access |
 |---|---|---|
 | POST | `/api/borrowings/` | Any authenticated user |
-| GET | `/api/borrowings/` | Staff only |
-| GET | `/api/borrowings/<id>/` | Staff only |
+| GET | `/api/borrowings/` | Own records for regular users; all records for staff |
+| GET | `/api/borrowings/<id>/` | Owner or staff |
 
 GET responses include the borrowing ID, nested book data, user ID, borrow date,
 expected return date, and nullable actual return date. The list response is an
 unpaginated JSON array.
 
-Anonymous requests receive `401`. GET requests from authenticated non-staff
-users receive `403`; staff requests for a missing borrowing receive `404`.
-PUT, PATCH, and DELETE are not supported (`405` for staff requests).
-Return operations and access to a regular user's own borrowings are not
-implemented yet.
+Anonymous requests receive `401`. Regular users can list and retrieve only
+their own borrowings. Staff can access all borrowings. Requests for nonexistent
+borrowings, or borrowings outside the user's permitted records, return `404`.
+
+The list endpoint supports these optional filters:
+
+- `is_active=true`: borrowings not returned yet.
+- `is_active=false`: returned borrowings.
+- `user_id=12`: borrowings of user 12; staff only. This parameter is ignored
+  for regular users, who always see only their own records.
+
+Staff can combine both filters:
+`/api/borrowings/?user_id=12&is_active=true`.
+
+Invalid `is_active` values or invalid staff `user_id` values return `400`.
+The `user_id` value must be a positive integer; a valid ID with no matching
+borrowings returns an empty list. Filters apply only to the list endpoint.
+PUT, PATCH, and DELETE are not supported (`405` for authenticated users).
+Return operations are not implemented yet.
 
 ### Create a borrowing
 
