@@ -1,6 +1,6 @@
 # Library Service API
 
-REST API for managing a library. Currently implements user accounts, book catalog CRUD, and borrowing creation/list/detail endpoints.
+REST API for managing a library. Currently implements user accounts, book catalog CRUD, and borrowing creation, reading, filtering, and returns.
 
 ## Implemented features
 
@@ -11,6 +11,7 @@ REST API for managing a library. Currently implements user accounts, book catalo
 - Authenticated borrowing creation with atomic inventory updates
 - Borrowing list and detail with nested book data: users see their own records, staff see all
 - Borrowing filters by active status; staff can also filter by user ID
+- Borrowing returns with atomic inventory restoration and duplicate-return protection
 - Borrowing date constraints and protection against deleting related books or users
 - OpenAPI schema and Swagger UI
 
@@ -82,6 +83,7 @@ Anyone can list and retrieve books without authentication. Creating, updating, a
 | POST | `/api/borrowings/` | Any authenticated user |
 | GET | `/api/borrowings/` | Own records for regular users; all records for staff |
 | GET | `/api/borrowings/<id>/` | Owner or staff |
+| POST | `/api/borrowings/<id>/return/` | Owner or staff |
 
 GET responses include the borrowing ID, nested book data, user ID, borrow date,
 expected return date, and nullable actual return date. The list response is an
@@ -105,7 +107,6 @@ Invalid `is_active` values or invalid staff `user_id` values return `400`.
 The `user_id` value must be a positive integer; a valid ID with no matching
 borrowings returns an empty list. Filters apply only to the list endpoint.
 PUT, PATCH, and DELETE are not supported (`405` for authenticated users).
-Return operations are not implemented yet.
 
 ### Create a borrowing
 
@@ -134,6 +135,22 @@ positive. If borrowing creation fails, the inventory change is rolled back.
 An unavailable book, a nonexistent book ID, or a past expected return date
 returns `400` without creating a borrowing or changing inventory. An anonymous
 POST returns `401` without changes.
+
+### Return a borrowing
+
+Send an authenticated `POST /api/borrowings/<id>/return/` with no request body.
+The owner or a staff user can return the borrowing. A successful request returns
+`200` with the full borrowing representation, including nested book data.
+
+The server sets the actual return date to today and increases available book
+inventory by one in a single transaction. If the inventory update fails, the
+return date is rolled back. The borrowing remains in the database as history.
+A second return attempt receives `400` without changing the date or inventory.
+
+Anonymous requests receive `401`. A nonexistent borrowing or one belonging to
+another regular user receives `404`. GET on the return endpoint receives `405`.
+After return, the borrowing appears under `is_active=false` rather than
+`is_active=true`.
 
 Expected and actual return dates cannot precede the borrow date. Returning on
 the borrow date is allowed; the actual return date can be null until return.
