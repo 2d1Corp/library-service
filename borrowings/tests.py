@@ -525,3 +525,153 @@ class BorrowingAccessTests(APITestCase):
         )
 
         self.assertEqual(self.response_ids(response), set())
+
+
+class BorrowingReturnTests(APITestCase):
+    def setUp(self):
+        self.reader = get_user_model().objects.create_user(
+            email="reader@example.com",
+            password="testpass123",
+        )
+        self.other_reader = get_user_model().objects.create_user(
+            email="other@example.com",
+            password="testpass123",
+        )
+        self.staff = get_user_model().objects.create_user(
+            email="staff@example.com",
+            password="testpass123",
+            is_staff=True,
+        )
+
+        self.book = Book.objects.create(
+            title="The Hobbit",
+            author="J. R. R. Tolkien",
+            cover=Book.CoverType.HARD,
+            inventory=2,
+            daily_fee="2.50",
+        )
+        self.borrowing = Borrowing.objects.create(
+            user=self.reader,
+            book=self.book,
+            expected_return_date=timezone.localdate() + timedelta(days=7),
+        )
+
+        self.url = reverse(
+            "borrowing-return",
+            args=[self.borrowing.id],
+        )
+        self.client.force_authenticate(user=self.reader)
+
+    def assert_not_returned(self):
+        self.borrowing.refresh_from_db()
+        self.book.refresh_from_db()
+
+        self.assertIsNone(self.borrowing.actual_return_date)
+        self.assertEqual(self.book.inventory, 2)
+
+    def test_owner_can_return_borrowing(self):
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.borrowing.refresh_from_db()
+        self.book.refresh_from_db()
+
+        self.assertEqual(
+            self.borrowing.actual_return_date,
+            timezone.localdate(),
+        )
+        self.assertEqual(self.book.inventory, 3)
+        self.assertEqual(response.json()["id"], self.borrowing.id)
+        self.assertEqual(
+            response.json()["actual_return_date"],
+            timezone.localdate().isoformat(),
+        )
+        self.assertEqual(response.json()["book"]["inventory"], 3)
+        self.assertEqual(Borrowing.objects.count(), 1)
+
+    def test_cannot_return_borrowing_twice(self):
+        first_response = self.client.post(self.url)
+        self.assertEqual(first_response.status_code, status.HTTP_200_OK)
+
+        self.borrowing.refresh_from_db()
+        first_return_date = self.borrowing.actual_return_date
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        self.borrowing.refresh_from_db()
+        self.book.refresh_from_db()
+
+        self.assertEqual(
+            self.borrowing.actual_return_date,
+            first_return_date,
+        )
+        self.assertEqual(self.book.inventory, 3)
+
+    def test_staff_can_return_another_users_borrowing(self):
+        self.client.force_authenticate(user=self.staff)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.borrowing.refresh_from_db()
+        self.book.refresh_from_db()
+
+        self.assertEqual(
+            self.borrowing.actual_return_date,
+            timezone.localdate(),
+        )
+        self.assertEqual(self.book.inventory, 3)
+
+    def test_regular_user_cannot_return_another_users_borrowing(self):
+        self.client.force_authenticate(user=self.other_reader)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assert_not_returned()
+
+    def test_anonymous_user_cannot_return_borrowing(self):
+        self.client.force_authenticate(user=None)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assert_not_returned()
+
+    def test_returns_404_for_missing_borrowing(self):
+        response = self.client.post(
+            reverse(
+                "borrowing-return",
+                args=[self.borrowing.id + 1],
+            ),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assert_not_returned()
+
+    def test_get_cannot_return_borrowing(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
+        self.assert_not_returned()
+
+    def test_rolls_back_return_date_when_inventory_update_fails(self):
+        with patch(
+            "borrowings.views.Book.objects.filter",
+        ) as filter_mock:
+            filter_mock.return_value.update.side_effect = RuntimeError(
+                "Simulated inventory update failure"
+            )
+
+            with self.assertRaises(RuntimeError):
+                self.client.post(self.url)
+
+        filter_mock.return_value.update.assert_called_once()
+        self.assert_not_returned()

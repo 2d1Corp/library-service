@@ -1,9 +1,17 @@
+from django.db import transaction
+from django.db.models import F
+from django.utils import timezone
+
 from drf_spectacular.utils import (
     OpenApiParameter,
     OpenApiTypes,
     extend_schema,
     extend_schema_view,
 )
+from rest_framework.decorators import action
+from rest_framework.response import Response
+
+from books.models import Book
 from rest_framework import mixins, serializers, viewsets
 from rest_framework.permissions import IsAuthenticated
 
@@ -87,3 +95,41 @@ class BorrowingViewSet(
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+    @extend_schema(
+        request=None,
+        responses={200: BorrowingReadSerializer},
+        description="Return a borrowing. Owner or staff only.",
+    )
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="return",
+        url_name="return",
+    )
+    def return_borrowing(self, request, pk=None):
+        borrowing = self.get_object()
+
+        with transaction.atomic():
+            updated = Borrowing.objects.filter(
+                pk=borrowing.pk,
+                actual_return_date__isnull=True,
+            ).update(
+                actual_return_date=timezone.localdate(),
+            )
+
+            if updated == 0:
+                raise serializers.ValidationError(
+                    {"detail": "This borrowing has already been returned."}
+                )
+
+            Book.objects.filter(
+                pk=borrowing.book_id,
+            ).update(
+                inventory=F("inventory") + 1,
+            )
+
+            borrowing.refresh_from_db()
+            data = self.get_serializer(borrowing).data
+
+        return Response(data)
