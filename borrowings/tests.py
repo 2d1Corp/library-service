@@ -1,4 +1,5 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.db.models import ProtectedError
@@ -205,14 +206,12 @@ class BorrowingApiTests(APITestCase):
         )
 
     def test_write_methods_are_not_allowed(self):
-        list_url = reverse("borrowing-list")
         detail_url = reverse(
             "borrowing-detail",
             args=[self.borrowing.id],
         )
 
         requests = (
-            ("post", list_url),
             ("put", detail_url),
             ("patch", detail_url),
             ("delete", detail_url),
@@ -267,3 +266,116 @@ class BorrowingApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(data), 4)
+
+    def test_regular_user_can_create_borrowing(self):
+        reader = get_user_model().objects.create_user(
+            email="reader@example.com",
+            password="testpass123",
+        )
+        self.client.force_authenticate(user=reader)
+
+        expected_date = timezone.localdate() + timedelta(days=7)
+        payload = {
+            "book": self.book.id,
+            "expected_return_date": expected_date.isoformat(),
+            "user": self.user.id,
+        }
+
+        response = self.client.post(
+            reverse("borrowing-list"),
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        borrowing = Borrowing.objects.get(pk=response.json()["id"])
+        self.assertEqual(borrowing.user_id, reader.id)
+        self.assertEqual(borrowing.book_id, self.book.id)
+        self.assertEqual(borrowing.expected_return_date, expected_date)
+        self.assertEqual(borrowing.borrow_date, timezone.localdate())
+        self.assertIsNone(borrowing.actual_return_date)
+
+        self.book.refresh_from_db()
+        self.assertEqual(self.book.inventory, 2)
+        self.assertEqual(Borrowing.objects.count(), 2)
+
+    def test_rejects_borrowing_when_no_copies_available(self):
+        self.book.inventory = 0
+        self.book.save(update_fields=["inventory"])
+
+        response = self.client.post(
+            reverse("borrowing-list"),
+            {
+                "book": self.book.id,
+                "expected_return_date": (
+                    timezone.localdate() + timedelta(days=7)
+                ).isoformat(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("book", response.json())
+        self.book.refresh_from_db()
+        self.assertEqual(self.book.inventory, 0)
+        self.assertEqual(Borrowing.objects.count(), 1)
+
+    def test_rejects_creation_with_past_expected_return_date(self):
+        response = self.client.post(
+            reverse("borrowing-list"),
+            {
+                "book": self.book.id,
+                "expected_return_date": (
+                    timezone.localdate() - timedelta(days=1)
+                ).isoformat(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("expected_return_date", response.json())
+        self.book.refresh_from_db()
+        self.assertEqual(self.book.inventory, 3)
+        self.assertEqual(Borrowing.objects.count(), 1)
+
+    def test_anonymous_user_cannot_create_borrowing(self):
+        self.client.force_authenticate(user=None)
+
+        response = self.client.post(
+            reverse("borrowing-list"),
+            {
+                "book": self.book.id,
+                "expected_return_date": (
+                    timezone.localdate() + timedelta(days=7)
+                ).isoformat(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.book.refresh_from_db()
+        self.assertEqual(self.book.inventory, 3)
+        self.assertEqual(Borrowing.objects.count(), 1)
+
+    def test_rolls_back_inventory_when_borrowing_creation_fails(self):
+        with patch(
+            "borrowings.serializers.Borrowing.objects.create",
+            side_effect=RuntimeError("Simulated creation failure"),
+        ) as create_mock:
+            with self.assertRaises(RuntimeError):
+                self.client.post(
+                    reverse("borrowing-list"),
+                    {
+                        "book": self.book.id,
+                        "expected_return_date": (
+                            timezone.localdate() + timedelta(days=7)
+                        ).isoformat(),
+                    },
+                    format="json",
+                )
+
+        create_mock.assert_called_once()
+        self.book.refresh_from_db()
+        self.assertEqual(self.book.inventory, 3)
+        self.assertEqual(Borrowing.objects.count(), 1)
