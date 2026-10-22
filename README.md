@@ -1,6 +1,6 @@
 # Library Service API
 
-REST API for managing a library. Currently implements user accounts, book catalog CRUD, and borrowing list/detail endpoints.
+REST API for managing a library. Currently implements user accounts, book catalog CRUD, and borrowing creation/list/detail endpoints.
 
 ## Implemented features
 
@@ -8,6 +8,7 @@ REST API for managing a library. Currently implements user accounts, book catalo
 - JWT authentication with access and refresh tokens
 - Viewing and updating your own profile
 - Public book list and detail; staff-only creation, updates, and deletion
+- Authenticated borrowing creation with atomic inventory updates
 - Staff-only borrowing list and detail with nested book data
 - Borrowing date constraints and protection against deleting related books or users
 - OpenAPI schema and Swagger UI
@@ -77,18 +78,47 @@ Anyone can list and retrieve books without authentication. Creating, updating, a
 
 | Method | Endpoint | Access |
 |---|---|---|
+| POST | `/api/borrowings/` | Any authenticated user |
 | GET | `/api/borrowings/` | Staff only |
 | GET | `/api/borrowings/<id>/` | Staff only |
 
-Responses include the borrowing ID, nested book data, user ID, borrow date,
+GET responses include the borrowing ID, nested book data, user ID, borrow date,
 expected return date, and nullable actual return date. The list response is an
 unpaginated JSON array.
 
-Anonymous requests receive `401`; authenticated non-staff users receive `403`.
-An authorized request for a missing borrowing receives `404`. POST, PUT, PATCH,
-and DELETE are not supported by these endpoints (`405` for staff requests).
-Borrowing creation, return operations, and access to a regular user's own
-borrowings are not implemented yet.
+Anonymous requests receive `401`. GET requests from authenticated non-staff
+users receive `403`; staff requests for a missing borrowing receive `404`.
+PUT, PATCH, and DELETE are not supported (`405` for staff requests).
+Return operations and access to a regular user's own borrowings are not
+implemented yet.
+
+### Create a borrowing
+
+Send an authenticated `POST /api/borrowings/` with a book ID and expected return
+date. For example (replace the ID and date with current valid values):
+
+```json
+{
+  "book": 7,
+  "expected_return_date": "2026-10-29"
+}
+```
+
+The expected return date must be today or later, and the book must have at least
+one available copy. A successful request returns `201` with `id`, `book` (the
+book ID), and `expected_return_date`.
+
+The owner is always the authenticated user; a `user` value in the request body
+cannot assign the borrowing to another account. The borrow date is set
+automatically, and the actual return date starts as null.
+
+Creating the borrowing and decrementing book inventory by one happen in a single
+transaction. Inventory is decremented only if its current database value is
+positive. If borrowing creation fails, the inventory change is rolled back.
+
+An unavailable book, a nonexistent book ID, or a past expected return date
+returns `400` without creating a borrowing or changing inventory. An anonymous
+POST returns `401` without changes.
 
 Expected and actual return dates cannot precede the borrow date. Returning on
 the borrow date is allowed; the actual return date can be null until return.
