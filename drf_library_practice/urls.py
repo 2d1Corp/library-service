@@ -29,4 +29,5 @@ urlpatterns = [
         name="swagger",
     ),
     path("api/", include("books.urls")),
+    path("api/", include("borrowings.urls")),
 ]

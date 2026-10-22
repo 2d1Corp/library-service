@@ -1,6 +1,6 @@
 # Library Service API
 
-REST API for managing a library. Currently implements user accounts and book catalog CRUD.
+REST API for managing a library. Currently implements user accounts, book catalog CRUD, and borrowing list/detail endpoints.
 
 ## Implemented features
 
@@ -8,6 +8,8 @@ REST API for managing a library. Currently implements user accounts and book cat
 - JWT authentication with access and refresh tokens
 - Viewing and updating your own profile
 - Public book list and detail; staff-only creation, updates, and deletion
+- Staff-only borrowing list and detail with nested book data
+- Borrowing date constraints and protection against deleting related books or users
 - OpenAPI schema and Swagger UI
 
 ## Local setup (PowerShell)
@@ -71,6 +73,28 @@ Anyone can list and retrieve books without authentication. Creating, updating, a
 | `inventory` | Available copies; zero is allowed |
 | `daily_fee` | Daily rental fee, from `0.01` to `9999.99` |
 
+## Borrowings
+
+| Method | Endpoint | Access |
+|---|---|---|
+| GET | `/api/borrowings/` | Staff only |
+| GET | `/api/borrowings/<id>/` | Staff only |
+
+Responses include the borrowing ID, nested book data, user ID, borrow date,
+expected return date, and nullable actual return date. The list response is an
+unpaginated JSON array.
+
+Anonymous requests receive `401`; authenticated non-staff users receive `403`.
+An authorized request for a missing borrowing receives `404`. POST, PUT, PATCH,
+and DELETE are not supported by these endpoints (`405` for staff requests).
+Borrowing creation, return operations, and access to a regular user's own
+borrowings are not implemented yet.
+
+Expected and actual return dates cannot precede the borrow date. Returning on
+the borrow date is allowed; the actual return date can be null until return.
+Related books and users cannot be deleted while borrowing records reference them.
+Reading borrowings does not change book inventory.
+
 ## Development
 
 Run all tests with coverage:
@@ -83,5 +107,5 @@ python -m coverage report -m
 Check Python code formatting:
 
 ```powershell
-python -m black --check books users drf_library_practice manage.py
+python -m black --check books users borrowings drf_library_practice manage.py
 ```
