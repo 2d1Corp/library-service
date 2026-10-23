@@ -20,6 +20,7 @@ from borrowings.serializers import (
     BorrowingCreateSerializer,
     BorrowingReadSerializer,
 )
+from notifications.tasks import notify_borrowing_created
 
 
 @extend_schema_view(
@@ -94,7 +95,8 @@ class BorrowingViewSet(
         return queryset
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        borrowing = serializer.save(user=self.request.user)
+        transaction.on_commit(lambda: notify_borrowing_created.delay(borrowing.id))
 
     @extend_schema(
         request=None,

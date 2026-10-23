@@ -9,6 +9,7 @@ from django.utils import timezone
 import borrowings
 from books.models import Book
 from borrowings.models import Borrowing
+from notifications.tasks import notify_borrowing_created
 from django.db import IntegrityError, transaction
 
 from django.urls import reverse
@@ -251,11 +252,19 @@ class BorrowingApiTests(APITestCase):
             "user": self.user.id,
         }
 
-        response = self.client.post(
-            reverse("borrowing-list"),
-            payload,
-            format="json",
-        )
+        with (
+            patch("notifications.tasks.send_telegram_message") as telegram_mock,
+            patch(
+                "borrowings.views.notify_borrowing_created.delay",
+                side_effect=notify_borrowing_created.run,
+            ),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            response = self.client.post(
+                reverse("borrowing-list"),
+                payload,
+                format="json",
+            )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
@@ -269,6 +278,12 @@ class BorrowingApiTests(APITestCase):
         self.book.refresh_from_db()
         self.assertEqual(self.book.inventory, 2)
         self.assertEqual(Borrowing.objects.count(), 2)
+
+        telegram_mock.assert_called_once()
+        message = telegram_mock.call_args.args[0]
+        self.assertIn(f"Borrowing {borrowing.id}", message)
+        self.assertIn(self.book.title, message)
+        self.assertIn(expected_date.isoformat(), message)
 
     def test_rejects_borrowing_when_no_copies_available(self):
         self.book.inventory = 0

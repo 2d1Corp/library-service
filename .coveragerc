@@ -3,6 +3,7 @@ source =
     users
     books
     borrowings
+    notifications
 omit =
     */tests.py
     */tests/*
