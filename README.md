@@ -52,9 +52,13 @@ also configure Telegram and run Redis and a Celery worker as described below.
 Creating a borrowing saves the record and decrements book inventory first.
 After the database transaction commits, Django queues a task in Redis.
 A separate Celery worker loads the borrowing and sends its ID, book title,
-and expected return date to the library's Telegram chat. This currently
-notifies on **creation only**; scheduled overdue and payment notifications
-are not implemented yet.
+and expected return date to the library's Telegram chat.
+
+At **09:00 UTC each day**, Celery beat queues a second task. It notifies the
+chat separately about every unreturned borrowing with an expected return
+date of **today or earlier**, including its book, reader email, and dates.
+If there are none, it sends `No borrowings overdue today!` once.
+Payment notifications are not implemented yet.
 
 Create a Telegram bot and add it to a chat where it can post messages. In
 `.env`, set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` (see `.env.example`).
@@ -79,11 +83,33 @@ In another PowerShell terminal with the virtual environment activated, run:
 python -m celery -A drf_library_practice worker -P solo -l info
 ```
 
-Keep Redis, the worker, and the Django development server running to try
-`POST /api/borrowings/`. A successful request queues the Telegram task;
-check the worker log and the chat for delivery. The worker is started
-separately: `runserver` alone does not send notifications. `-P solo` is
-used for local Windows development.
+Restart the worker after changing `notifications/tasks.py` so it discovers
+new tasks.
+
+Start the daily scheduler in a third PowerShell terminal:
+
+```powershell
+python -m celery -A drf_library_practice beat -l info
+```
+
+Run only one beat instance for this schedule, or duplicate daily
+notifications may be sent. The default scheduler writes a local
+`celerybeat-schedule` file (ignored by Git).
+
+Keep Redis and the worker running to send notifications. The Django
+development server is also needed for API requests, but not for the daily
+schedule. `runserver` alone sends no notifications. `-P solo` is used for
+local Windows worker development.
+
+To check delivery without waiting until 09:00 UTC, enqueue the overdue
+task manually while Redis and the worker are running:
+
+```powershell
+python manage.py shell -c "from notifications.tasks import notify_overdue_borrowings; notify_overdue_borrowings.delay()"
+```
+
+This sends real messages to the configured Telegram chat. Running it
+manually in addition to the daily schedule can send duplicates.
 
 ## API documentation and authentication
 
