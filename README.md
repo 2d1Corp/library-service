@@ -14,6 +14,7 @@ REST API for managing a library. Currently implements user accounts, book catalo
 - Borrowing returns with atomic inventory restoration and duplicate-return protection
 - Borrowing date constraints and protection against deleting related books or users
 - OpenAPI schema and Swagger UI
+- Telegram notifications to the library chat after a borrowing is created
 
 ## Local setup (PowerShell)
 
@@ -43,7 +44,46 @@ python manage.py createsuperuser
 python manage.py runserver
 ```
 
-These instructions start the local development server.
+These instructions start the local development server. To send notifications,
+also configure Telegram and run Redis and a Celery worker as described below.
+
+## Borrowing notifications (Telegram)
+
+Creating a borrowing saves the record and decrements book inventory first.
+After the database transaction commits, Django queues a task in Redis.
+A separate Celery worker loads the borrowing and sends its ID, book title,
+and expected return date to the library's Telegram chat. This currently
+notifies on **creation only**; scheduled overdue and payment notifications
+are not implemented yet.
+
+Create a Telegram bot and add it to a chat where it can post messages. In
+`.env`, set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` (see `.env.example`).
+Never commit real credentials. The setup command above overwrites `.env`,
+so add these values **after** running it.
+
+Start Redis locally with Docker:
+
+```powershell
+docker run -d --name library-redis -p 127.0.0.1:6379:6379 redis:7-alpine
+docker exec library-redis redis-cli ping
+```
+
+The ping should return `PONG`. On later runs, use
+`docker start library-redis` instead of `docker run`. The default broker
+address is `redis://127.0.0.1:6379/0`; set `CELERY_BROKER_URL` in `.env`
+if your Redis server has a different address.
+
+In another PowerShell terminal with the virtual environment activated, run:
+
+```powershell
+python -m celery -A drf_library_practice worker -P solo -l info
+```
+
+Keep Redis, the worker, and the Django development server running to try
+`POST /api/borrowings/`. A successful request queues the Telegram task;
+check the worker log and the chat for delivery. The worker is started
+separately: `runserver` alone does not send notifications. `-P solo` is
+used for local Windows development.
 
 ## API documentation and authentication
 
@@ -58,7 +98,7 @@ To authenticate:
    Authorize: Bearer <access_token>
    ```
 
-   The configured header name is `Authorize`. In Swagger UI, click **Authorize** and enter the access token; the bearer prefix is added automatically.
+   The configured header name is `Authorize`. In Swagger UI, click **Authorize** and enter `Bearer <access_token>` (including the prefix and space). Swagger UI does not add the prefix automatically for this custom header.
 3. Send the refresh token to `POST /api/users/token/refresh/` to obtain a new access token.
 
 Regular accounts can register at `POST /api/users/` and access their own profile at `/api/users/me/`.
@@ -169,5 +209,5 @@ python -m coverage report -m
 Check Python code formatting:
 
 ```powershell
-python -m black --check books users borrowings drf_library_practice manage.py
+python -m black --check books users borrowings notifications drf_library_practice manage.py
 ```
