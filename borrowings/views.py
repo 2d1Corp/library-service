@@ -1,7 +1,9 @@
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
+import logging
 
+from kombu.exceptions import OperationalError
 from drf_spectacular.utils import (
     OpenApiParameter,
     OpenApiTypes,
@@ -21,6 +23,8 @@ from borrowings.serializers import (
     BorrowingReadSerializer,
 )
 from notifications.tasks import notify_borrowing_created
+
+logger = logging.getLogger(__name__)
 
 
 @extend_schema_view(
@@ -96,7 +100,17 @@ class BorrowingViewSet(
 
     def perform_create(self, serializer):
         borrowing = serializer.save(user=self.request.user)
-        transaction.on_commit(lambda: notify_borrowing_created.delay(borrowing.id))
+
+        def enqueue_notification():
+            try:
+                notify_borrowing_created.delay(borrowing.id)
+            except OperationalError:
+                logger.exception(
+                    "Could not queue notification for borrowing %s",
+                    borrowing.id,
+                )
+
+        transaction.on_commit(enqueue_notification)
 
     @extend_schema(
         request=None,

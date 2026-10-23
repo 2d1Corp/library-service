@@ -5,6 +5,7 @@ from django.contrib.auth import get_user_model
 from django.db.models import ProtectedError
 from django.test import TestCase
 from django.utils import timezone
+from kombu.exceptions import OperationalError
 
 import borrowings
 from books.models import Book
@@ -284,6 +285,36 @@ class BorrowingApiTests(APITestCase):
         self.assertIn(f"Borrowing {borrowing.id}", message)
         self.assertIn(self.book.title, message)
         self.assertIn(expected_date.isoformat(), message)
+
+    def test_creates_borrowing_when_notification_queue_is_unavailable(self):
+        with (
+            patch(
+                "borrowings.views.notify_borrowing_created.delay",
+                side_effect=OperationalError("Broker unavailable"),
+            ),
+            self.assertLogs("borrowings.views", level="ERROR"),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            response = self.client.post(
+                reverse("borrowing-list"),
+                {
+                    "book": self.book.id,
+                    "expected_return_date": (
+                        timezone.localdate() + timedelta(days=7)
+                    ).isoformat(),
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        borrowing = Borrowing.objects.get(pk=response.json()["id"])
+        self.assertEqual(borrowing.book_id, self.book.id)
+        self.assertEqual(borrowing.user_id, self.user.id)
+        self.assertEqual(Borrowing.objects.count(), 2)
+
+        self.book.refresh_from_db()
+        self.assertEqual(self.book.inventory, 2)
 
     def test_rejects_borrowing_when_no_copies_available(self):
         self.book.inventory = 0
