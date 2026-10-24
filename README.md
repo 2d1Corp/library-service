@@ -188,7 +188,7 @@ date. For example (replace the ID and date with current valid values):
 
 The expected return date must be today or later, and the book must have at least
 one available copy. A successful request returns `201` with `id`, `book` (the
-book ID), and `expected_return_date`.
+book ID), `expected_return_date`, and a read-only `payments` array.
 
 The owner is always the authenticated user; a `user` value in the request body
 cannot assign the borrowing to another account. The borrow date is set
@@ -257,7 +257,28 @@ The success and cancel URLs are placeholders at example.com.
 The local Payment remains PENDING even after a successful sandbox
 payment: server-side payment confirmation is not implemented yet.
 
-Borrowing creation does not automatically create a payment.
+### Automatic borrowing payments
+
+Set `STRIPE_SECRET_KEY` in `.env` to a sandbox key starting with `sk_test_`.
+The key is required to create borrowings.
+
+POST `/api/borrowings/` automatically creates a Stripe Checkout Session
+and a related PENDING Payment.
+
+The amount in USD is:
+`max(1, (expected_return_date - borrow_date).days) * book.daily_fee`.
+Same-day borrowing costs one daily fee. The expected return day is not
+added separately. The amount is converted to cents for Stripe.
+
+Borrowing create, list and detail responses include a read-only
+`payments` array containing payment records and checkout URLs.
+
+If payment preparation raises a handled Stripe error, the API returns
+503 and [rolls](https://www.youtube.com/shorts/_6HzLIJPH2A) back the local borrowing and inventory changes.
+Database rollback does not undo a Session already created in Stripe.
+
+Success/cancel URLs remain placeholders. Payments are not automatically
+marked PAID yet.
 
 ## Development
 
