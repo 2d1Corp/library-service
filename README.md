@@ -223,6 +223,20 @@ the borrow date is allowed; the actual return date can be null until return.
 Related books and users cannot be deleted while borrowing records reference them.
 Reading borrowings does not change book inventory.
 
+## Payments
+
+- GET `/api/payments/` — own payments for regular users; all payments for staff.
+- GET `/api/payments/<id>/` — payment details for the owner or staff.
+- Authentication is required (`401` for anonymous requests).
+- Missing payments and other users' payments return `404`.
+- POST, PUT, PATCH and DELETE are not supported (`405` for authenticated users).
+
+Responses include the borrowing ID, status, payment type, amount in USD,
+and Stripe session ID and URL.
+
+This stage provides read-only payment records. Stripe session creation
+and payment processing are not implemented yet.
+
 ## Development
 
 Run all tests with coverage:
