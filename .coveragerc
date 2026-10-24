@@ -4,6 +4,7 @@ source =
     books
     borrowings
     notifications
+    payments
 omit =
     */tests.py
     */tests/*
