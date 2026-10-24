@@ -97,7 +97,15 @@ class PaymentCancelView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
 
-    @extend_schema(responses={200: PaymentCallbackResponseSerializer})
+    @extend_schema(
+        summary="Static checkout cancel return page",
+        description=(
+            "Static informational return page. It does not read or validate "
+            "session_id, look up a Payment, or contact Stripe. It returns the "
+            "same message for every request and never changes payment status."
+        ),
+        responses={200: PaymentCallbackResponseSerializer},
+    )
     def get(self, request):
         return Response(
             {

@@ -1,6 +1,8 @@
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
+from django.db.models.query import QuerySet
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -17,6 +19,7 @@ from stripe import StripeError
 from stripe.checkout import Session
 
 from payments.stripe_demo import create_test_payment
+from payments.services import confirm_payment
 
 
 @override_settings(STRIPE_SECRET_KEY="sk_test_example")
@@ -225,6 +228,66 @@ class PaymentApiTests(APITestCase):
         self.assertEqual(Payment.objects.count(), 2)
         retrieve.assert_called_once_with(self.payment.session_id)
 
+    def test_database_rejects_duplicate_session_id(self):
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Payment.objects.create(
+                    borrowing=self.payment.borrowing,
+                    money_to_pay="6.00",
+                    session_id=self.payment.session_id,
+                    session_url=self.payment.session_url,
+                )
+        self.assertEqual(Payment.objects.count(), 2)
+
+    def test_stale_pending_requests_confirm_same_payment_once(self):
+        retrieve = self.mock_stripe_session()
+        first_snapshot = Payment.objects.get(pk=self.payment.pk)
+        second_snapshot = Payment.objects.get(pk=self.payment.pk)
+        updated_rows = []
+        original_update = QuerySet.update
+
+        def record_update(queryset, **values):
+            count = original_update(queryset, **values)
+            updated_rows.append(count)
+            return count
+
+        with patch.object(QuerySet, "update", autospec=True, side_effect=record_update):
+            self.assertTrue(confirm_payment(first_snapshot))
+            self.assertTrue(confirm_payment(second_snapshot))
+
+        self.assertEqual(updated_rows, [1, 0])
+        self.assertEqual(retrieve.call_count, 2)
+        self.payment.refresh_from_db()
+        self.assertEqual(self.payment.status, Payment.Status.PAID)
+        self.assertEqual(Payment.objects.count(), 2)
+
+    def test_zero_row_update_does_not_report_pending_payment_as_paid(self):
+        self.mock_stripe_session()
+        with patch.object(QuerySet, "update", return_value=0):
+            response = self.client.get(
+                reverse("payment-success"),
+                {"session_id": self.payment.session_id},
+            )
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.payment.refresh_from_db()
+        self.assertEqual(self.payment.status, Payment.Status.PENDING)
+
+    def test_payment_removed_during_verification_is_not_reported_paid(self):
+        retrieve = self.mock_stripe_session()
+        session = retrieve.return_value
+
+        def remove_payment(session_id):
+            Payment.objects.filter(pk=self.payment.pk).delete()
+            return session
+
+        retrieve.side_effect = remove_payment
+        response = self.client.get(
+            reverse("payment-success"),
+            {"session_id": self.payment.session_id},
+        )
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertFalse(Payment.objects.filter(pk=self.payment.pk).exists())
+
     def test_unpaid_session_does_not_confirm_payment(self):
         self.mock_stripe_session(payment_status="unpaid")
         response = self.client.get(
@@ -310,4 +373,16 @@ class PaymentApiTests(APITestCase):
                 self.payment.refresh_from_db()
                 self.assertEqual(self.payment.status, payment_status)
                 self.assertEqual(Payment.objects.count(), 2)
+        retrieve.assert_not_called()
+
+    def test_static_cancel_ignores_session_id(self):
+        retrieve = self.mock_stripe_session()
+        plain = self.client.get(reverse("payment-cancel"))
+        with_session = self.client.get(
+            reverse("payment-cancel"),
+            {"session_id": "not-a-real-session"},
+        )
+        self.assertEqual(plain.status_code, status.HTTP_200_OK)
+        self.assertEqual(with_session.status_code, status.HTTP_200_OK)
+        self.assertEqual(plain.json(), with_session.json())
         retrieve.assert_not_called()

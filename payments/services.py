@@ -107,8 +107,12 @@ def confirm_payment(payment):
     if session.get("payment_status") != "paid":
         return False
 
-    Payment.objects.filter(
+    updated = Payment.objects.filter(
         pk=payment.pk,
         status=Payment.Status.PENDING,
     ).update(status=Payment.Status.PAID)
-    return True
+    if updated == 1:
+        return True
+
+    # Another request may have confirmed it after our initial read.
+    return Payment.objects.filter(pk=payment.pk, status=Payment.Status.PAID).exists()

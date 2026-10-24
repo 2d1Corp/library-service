@@ -37,6 +37,19 @@ python -c "from pathlib import Path; from django.core.management.utils import ge
 
 Run this once during initial setup: it replaces the contents of `.env`. The file is ignored by Git; `.env.example` documents the required variable without a real secret.
 
+`DEBUG` and `ALLOWED_HOSTS` are read from the environment or `.env`.
+Debug defaults to `False`; allowed hosts default to `127.0.0.1,localhost`.
+Host names are comma-separated, without a scheme or port. For example:
+
+```dotenv
+DEBUG=False
+ALLOWED_HOSTS=api.example.com,localhost
+```
+
+For local development only, set `DEBUG=True` if you need Django's debug pages
+and development static-file serving. Keep it `False` on a public server and
+set `ALLOWED_HOSTS` to that server's real host names.
+
 Apply migrations and create a superuser to create, update, and delete books:
 
 ```powershell
@@ -290,13 +303,19 @@ request host. Existing Sessions retain the URLs used when they were created.
   A confirmed Payment becomes PAID and the endpoint returns `200`.
 - Repeating success for an already confirmed Payment returns `200` without
   creating records or repeating the status transition.
+- Session IDs are unique at the database level. If concurrent confirmations
+  reach the conditional update, only one changes PENDING to PAID. A request
+  that updates zero rows reports success only if the record is now PAID.
 - A missing, empty or oversized session ID returns `400`; an unknown local
   session returns `404`; mismatched Session data returns `400`; an unpaid
   Session returns `409`. These responses leave the Payment status unchanged.
 - Missing sandbox credentials or a Stripe request failure returns `503` and
   leaves the Payment status unchanged.
-- GET `/api/payments/cancel/` returns a payment-can-be-completed-later message.
-  It does not cancel the Stripe Session or change any Payment. Checkout links
+- GET `/api/payments/cancel/` is a **static informational return page**. It
+  always returns the same payment-can-be-completed-later message. It does not
+  accept or validate a `session_id`, associate the visit with any Payment or
+  Checkout Session, contact Stripe, or change any payment status. Even if a
+  caller supplies a query parameter, the page ignores it. Checkout links
   normally remain valid for 24 hours after Session creation.
 
 These two return endpoints are public because Stripe redirects a browser
