@@ -47,7 +47,9 @@ class BorrowingViewSet(
     mixins.CreateModelMixin,
     viewsets.ReadOnlyModelViewSet,
 ):
-    queryset = Borrowing.objects.select_related("book", "user")
+    queryset = Borrowing.objects.select_related("book", "user").prefetch_related(
+        "payments"
+    )
     permission_classes = [IsAuthenticated]
 
     def get_serializer_class(self):

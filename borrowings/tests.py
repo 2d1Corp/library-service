@@ -16,6 +16,10 @@ from django.db import IntegrityError, transaction
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
+from django.test import override_settings
+from stripe import StripeError
+
+from payments.models import Payment
 
 
 class BorrowingModelTests(TestCase):
@@ -105,8 +109,18 @@ class BorrowingModelTests(TestCase):
         self.assertTrue(Borrowing.objects.filter(pk=borrowing.pk).exists())
 
 
+@override_settings(STRIPE_SECRET_KEY="sk_test_example")
 class BorrowingApiTests(APITestCase):
     def setUp(self):
+        stripe_patch = patch("payments.services.StripeClient")
+        self.addCleanup(stripe_patch.stop)
+        client_class = stripe_patch.start()
+
+        self.stripe_create = client_class.return_value.v1.checkout.sessions.create
+        self.stripe_create.return_value.id = "cs_test_borrowing"
+        self.stripe_create.return_value.url = (
+            "https://checkout.stripe.com/c/pay/cs_test_borrowing"
+        )
         self.user = get_user_model().objects.create_user(
             email="staff@example.com",
             password="testpass123",
@@ -208,10 +222,10 @@ class BorrowingApiTests(APITestCase):
         self.book.refresh_from_db()
         self.assertEqual(self.book.inventory, 3)
 
-    def test_list_uses_one_query_when_borrowings_increase(self):
+    def test_list_uses_two_queries_when_borrowings_increase(self):
         url = reverse("borrowing-list")
 
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             response = self.client.get(url)
             data = response.json()
 
@@ -232,7 +246,7 @@ class BorrowingApiTests(APITestCase):
                 expected_return_date=(timezone.localdate() + timedelta(days=7)),
             )
 
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             response = self.client.get(url)
             data = response.json()
 
@@ -395,6 +409,97 @@ class BorrowingApiTests(APITestCase):
         self.book.refresh_from_db()
         self.assertEqual(self.book.inventory, 3)
         self.assertEqual(Borrowing.objects.count(), 1)
+
+    def test_creates_borrowing_with_payment(self):
+        response = self.client.post(
+            reverse("borrowing-list"),
+            {
+                "book": self.book.id,
+                "expected_return_date": (
+                    timezone.localdate() + timedelta(days=3)
+                ).isoformat(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        payment = Payment.objects.get(
+            borrowing_id=response.json()["id"],
+        )
+        self.assertEqual(str(payment.money_to_pay), "7.50")
+        self.assertEqual(payment.status, Payment.Status.PENDING)
+        self.assertEqual(payment.session_id, "cs_test_borrowing")
+
+        self.assertEqual(len(response.json()["payments"]), 1)
+        self.assertEqual(
+            response.json()["payments"][0]["id"],
+            payment.id,
+        )
+        self.assertEqual(
+            response.json()["payments"][0]["session_url"],
+            payment.session_url,
+        )
+
+        self.stripe_create.assert_called_once()
+        parameters = self.stripe_create.call_args.args[0]
+        self.assertEqual(
+            parameters["line_items"][0]["price_data"]["unit_amount"],
+            750,
+        )
+
+        self.book.refresh_from_db()
+        self.assertEqual(self.book.inventory, 2)
+        self.assertEqual(Borrowing.objects.count(), 2)
+        self.assertEqual(Payment.objects.count(), 1)
+
+    def test_stripe_failure_rolls_back_borrowing_and_inventory(self):
+        self.stripe_create.side_effect = StripeError("Test Stripe failure")
+
+        with self.assertLogs("borrowings.serializers", level="ERROR"):
+            response = self.client.post(
+                reverse("borrowing-list"),
+                {
+                    "book": self.book.id,
+                    "expected_return_date": (
+                        timezone.localdate() + timedelta(days=3)
+                    ).isoformat(),
+                },
+                format="json",
+            )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+        self.book.refresh_from_db()
+        self.assertEqual(self.book.inventory, 3)
+        self.assertEqual(Borrowing.objects.count(), 1)
+        self.assertEqual(Payment.objects.count(), 0)
+
+    def test_same_day_borrowing_costs_one_day(self):
+        response = self.client.post(
+            reverse("borrowing-list"),
+            {
+                "book": self.book.id,
+                "expected_return_date": timezone.localdate().isoformat(),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        payment = Payment.objects.get(
+            borrowing_id=response.json()["id"],
+        )
+        self.assertEqual(str(payment.money_to_pay), "2.50")
+
+        parameters = self.stripe_create.call_args.args[0]
+        self.assertEqual(
+            parameters["line_items"][0]["price_data"]["unit_amount"],
+            250,
+        )
 
 
 class BorrowingAccessTests(APITestCase):
