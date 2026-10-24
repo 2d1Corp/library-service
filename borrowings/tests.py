@@ -444,6 +444,14 @@ class BorrowingApiTests(APITestCase):
         self.stripe_create.assert_called_once()
         parameters = self.stripe_create.call_args.args[0]
         self.assertEqual(
+            parameters["success_url"],
+            "http://testserver/api/payments/success/?session_id={CHECKOUT_SESSION_ID}",
+        )
+        self.assertEqual(
+            parameters["cancel_url"],
+            "http://testserver/api/payments/cancel/",
+        )
+        self.assertEqual(
             parameters["line_items"][0]["price_data"]["unit_amount"],
             750,
         )

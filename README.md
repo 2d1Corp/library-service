@@ -15,6 +15,7 @@ REST API for managing a library. Currently implements user accounts, book catalo
 - Borrowing date constraints and protection against deleting related books or users
 - OpenAPI schema and Swagger UI
 - Telegram notifications to the library chat after a borrowing is created
+- Automatic Stripe sandbox Checkout sessions and server-verified payment confirmation
 
 ## Local setup (PowerShell)
 
@@ -254,8 +255,9 @@ Open the printed Checkout URL. Use Stripe's test card
 `4242 4242 4242 4242`, a future expiry date, and any three-digit CVC.
 
 The success and cancel URLs are placeholders at example.com.
-The local Payment remains PENDING even after a successful sandbox
-payment: server-side payment confirmation is not implemented yet.
+This historical demo keeps placeholder return URLs, so paying its Session
+does not update the local status automatically. To confirm an existing demo
+payment, call the success endpoint below with its session ID.
 
 ### Automatic borrowing payments
 
@@ -277,8 +279,36 @@ If payment preparation raises a handled Stripe error, the API returns
 503 and [rolls](https://www.youtube.com/shorts/_6HzLIJPH2A) back the local borrowing and inventory changes.
 Database rollback does not undo a Session already created in Stripe.
 
-Success/cancel URLs remain placeholders. Payments are not automatically
-marked PAID yet.
+New automatic Sessions use success and cancel URLs built from the current
+request host. Existing Sessions retain the URLs used when they were created.
+
+### Payment confirmation
+
+- GET `/api/payments/success/?session_id=cs_test_...` checks the Session on
+  Stripe's server. It verifies the Session ID, borrowing metadata, USD amount,
+  sandbox mode and payment mode before accepting `payment_status=paid`.
+  A confirmed Payment becomes PAID and the endpoint returns `200`.
+- Repeating success for an already confirmed Payment returns `200` without
+  creating records or repeating the status transition.
+- A missing, empty or oversized session ID returns `400`; an unknown local
+  session returns `404`; mismatched Session data returns `400`; an unpaid
+  Session returns `409`. These responses leave the Payment status unchanged.
+- Missing sandbox credentials or a Stripe request failure returns `503` and
+  leaves the Payment status unchanged.
+- GET `/api/payments/cancel/` returns a payment-can-be-completed-later message.
+  It does not cancel the Stripe Session or change any Payment. Checkout links
+  normally remain valid for 24 hours after Session creation.
+
+These two return endpoints are public because Stripe redirects a browser
+without a JWT header. They return only a short message, not customer or
+borrowing details. Payment list/detail endpoints still require authentication
+and retain their ownership restrictions.
+
+This assignment implementation verifies payments when the browser visits
+success. If a customer closes the browser before returning, or a payment
+settles later, the local record may remain PENDING until success is revisited.
+Webhook-driven confirmation is not implemented. Do not treat redirect-based
+confirmation as guaranteed background payment reconciliation.
 
 ## Development
 
@@ -292,5 +322,5 @@ python -m coverage report -m
 Check Python code formatting:
 
 ```powershell
-python -m black --check books users borrowings notifications drf_library_practice manage.py
+python -m black --check books users borrowings notifications payments drf_library_practice manage.py
 ```

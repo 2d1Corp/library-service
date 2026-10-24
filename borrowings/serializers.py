@@ -79,7 +79,10 @@ class BorrowingCreateSerializer(serializers.ModelSerializer):
                     )
 
                 borrowing = Borrowing.objects.create(**validated_data)
-                create_payment_for_borrowing(borrowing)
+                create_payment_for_borrowing(
+                    borrowing,
+                    self.context["request"],
+                )
 
         except PaymentCreationError as error:
             logger.exception("Payment preparation failed.")

@@ -13,10 +13,13 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.test import override_settings
+from stripe import StripeError
+from stripe.checkout import Session
 
 from payments.stripe_demo import create_test_payment
 
 
+@override_settings(STRIPE_SECRET_KEY="sk_test_example")
 class PaymentApiTests(APITestCase):
     def setUp(self):
         self.reader = get_user_model().objects.create_user(
@@ -184,3 +187,127 @@ class PaymentApiTests(APITestCase):
 
         client_class.assert_not_called()
         self.assertEqual(Payment.objects.count(), 2)
+
+    def mock_stripe_session(self, **changes):
+        stripe_patch = patch("payments.services.StripeClient")
+        self.addCleanup(stripe_patch.stop)
+        client_class = stripe_patch.start()
+        retrieve = client_class.return_value.v1.checkout.sessions.retrieve
+        data = {
+            "id": self.payment.session_id,
+            "object": "checkout.session",
+            "mode": "payment",
+            "livemode": False,
+            "currency": "usd",
+            "amount_total": 600,
+            "metadata": {"borrowing_id": str(self.payment.borrowing_id)},
+            "payment_status": "paid",
+        }
+        data.update(changes)
+        retrieve.return_value = Session.construct_from(data, "sk_test_example")
+        return retrieve
+
+    def test_success_confirms_payment_only_once(self):
+        retrieve = self.mock_stripe_session()
+        url = reverse("payment-success")
+        query = {"session_id": self.payment.session_id}
+
+        first = self.client.get(url, query)
+        second = self.client.get(url, query)
+
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        self.assertEqual(first.json(), {"detail": "Payment confirmed."})
+        self.payment.refresh_from_db()
+        self.assertEqual(self.payment.status, Payment.Status.PAID)
+        self.other_payment.refresh_from_db()
+        self.assertEqual(self.other_payment.status, Payment.Status.PENDING)
+        self.assertEqual(Payment.objects.count(), 2)
+        retrieve.assert_called_once_with(self.payment.session_id)
+
+    def test_unpaid_session_does_not_confirm_payment(self):
+        self.mock_stripe_session(payment_status="unpaid")
+        response = self.client.get(
+            reverse("payment-success"),
+            {"session_id": self.payment.session_id},
+        )
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.payment.refresh_from_db()
+        self.assertEqual(self.payment.status, Payment.Status.PENDING)
+
+    def test_mismatched_session_does_not_confirm_payment(self):
+        retrieve = self.mock_stripe_session()
+        invalid_values = {
+            "id": "cs_test_unrelated",
+            "mode": "setup",
+            "livemode": True,
+            "currency": "eur",
+            "amount_total": 1,
+            "metadata": {"borrowing_id": "unrelated"},
+        }
+        for field, invalid_value in invalid_values.items():
+            with self.subTest(field=field):
+                original = retrieve.return_value[field]
+                retrieve.return_value[field] = invalid_value
+                response = self.client.get(
+                    reverse("payment-success"),
+                    {"session_id": self.payment.session_id},
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.payment.refresh_from_db()
+                self.assertEqual(self.payment.status, Payment.Status.PENDING)
+                retrieve.return_value[field] = original
+
+    def test_success_requires_session_id(self):
+        retrieve = self.mock_stripe_session()
+        for query in ({}, {"session_id": ""}, {"session_id": "x" * 256}):
+            with self.subTest(query=query):
+                response = self.client.get(reverse("payment-success"), query)
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        retrieve.assert_not_called()
+
+    def test_unknown_session_returns_404(self):
+        retrieve = self.mock_stripe_session()
+        response = self.client.get(
+            reverse("payment-success"),
+            {"session_id": "cs_test_missing"},
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        retrieve.assert_not_called()
+
+    def test_stripe_failure_keeps_payment_pending(self):
+        retrieve = self.mock_stripe_session()
+        retrieve.side_effect = StripeError("Test Stripe failure")
+        with self.assertLogs("payments.views", level="ERROR"):
+            response = self.client.get(
+                reverse("payment-success"),
+                {"session_id": self.payment.session_id},
+            )
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.payment.refresh_from_db()
+        self.assertEqual(self.payment.status, Payment.Status.PENDING)
+
+    @override_settings(STRIPE_SECRET_KEY="")
+    def test_confirmation_without_key_keeps_payment_pending(self):
+        retrieve = self.mock_stripe_session()
+        with self.assertLogs("payments.views", level="ERROR"):
+            response = self.client.get(
+                reverse("payment-success"),
+                {"session_id": self.payment.session_id},
+            )
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.payment.refresh_from_db()
+        self.assertEqual(self.payment.status, Payment.Status.PENDING)
+        retrieve.assert_not_called()
+
+    def test_cancel_does_not_change_payment(self):
+        retrieve = self.mock_stripe_session()
+        for payment_status in (Payment.Status.PENDING, Payment.Status.PAID):
+            with self.subTest(payment_status=payment_status):
+                Payment.objects.filter(pk=self.payment.pk).update(status=payment_status)
+                response = self.client.get(reverse("payment-cancel"))
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+                self.payment.refresh_from_db()
+                self.assertEqual(self.payment.status, payment_status)
+                self.assertEqual(Payment.objects.count(), 2)
+        retrieve.assert_not_called()
