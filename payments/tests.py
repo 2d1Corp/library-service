@@ -9,6 +9,12 @@ from rest_framework.test import APITestCase
 from books.models import Book
 from borrowings.models import Borrowing
 from payments.models import Payment
+from decimal import Decimal
+from unittest.mock import patch
+
+from django.test import override_settings
+
+from payments.stripe_demo import create_test_payment
 
 
 class PaymentApiTests(APITestCase):
@@ -132,4 +138,49 @@ class PaymentApiTests(APITestCase):
 
         self.payment.refresh_from_db()
         self.assertEqual(self.payment.status, Payment.Status.PENDING)
+        self.assertEqual(Payment.objects.count(), 2)
+
+    @override_settings(STRIPE_SECRET_KEY="sk_test_example")
+    def test_creates_payment_from_stripe_session(self):
+        with patch("payments.stripe_demo.StripeClient") as client_class:
+            create_session = client_class.return_value.v1.checkout.sessions.create
+            create_session.return_value.id = "cs_test_demo"
+            create_session.return_value.url = (
+                "https://checkout.stripe.com/c/pay/cs_test_demo"
+            )
+
+            payment = create_test_payment(self.payment.borrowing_id)
+
+        client_class.assert_called_once_with("sk_test_example")
+        create_session.assert_called_once()
+
+        parameters = create_session.call_args.args[0]
+        item = parameters["line_items"][0]
+
+        self.assertEqual(parameters["mode"], "payment")
+        self.assertEqual(item["price_data"]["currency"], "usd")
+        self.assertEqual(item["price_data"]["unit_amount"], 600)
+        self.assertEqual(item["quantity"], 1)
+
+        payment.refresh_from_db()
+        self.assertEqual(payment.borrowing_id, self.payment.borrowing_id)
+        self.assertEqual(payment.money_to_pay, Decimal("6.00"))
+        self.assertEqual(payment.status, Payment.Status.PENDING)
+        self.assertEqual(payment.session_id, "cs_test_demo")
+        self.assertEqual(
+            payment.session_url,
+            "https://checkout.stripe.com/c/pay/cs_test_demo",
+        )
+        self.assertEqual(Payment.objects.count(), 3)
+
+    @override_settings(STRIPE_SECRET_KEY="")
+    def test_missing_key_does_not_create_payment(self):
+        with patch("payments.stripe_demo.StripeClient") as client_class:
+            with self.assertRaisesMessage(
+                ValueError,
+                "Configure a Stripe test secret key first.",
+            ):
+                create_test_payment(self.payment.borrowing_id)
+
+        client_class.assert_not_called()
         self.assertEqual(Payment.objects.count(), 2)

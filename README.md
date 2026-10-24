@@ -234,8 +234,30 @@ Reading borrowings does not change book inventory.
 Responses include the borrowing ID, status, payment type, amount in USD,
 and Stripe session ID and URL.
 
-This stage provides read-only payment records. Stripe session creation
-and payment processing are not implemented yet.
+### Manual Stripe sandbox demo
+
+Add `STRIPE_SECRET_KEY` to your local `.env` using a sandbox secret key
+starting with `sk_test_`. Never commit the key.
+
+Choose an existing borrowing ID and run the following command,
+replacing `1` with that ID:
+
+```powershell
+python manage.py shell -c "from payments.stripe_demo import create_test_payment; create_test_payment(1)"
+```
+
+This command contacts Stripe, creates a sandbox Checkout Session for a
+fixed USD 6.00, and saves a related Payment with the returned session ID
+and URL. Each run creates a new Session and Payment.
+
+Open the printed Checkout URL. Use Stripe's test card
+`4242 4242 4242 4242`, a future expiry date, and any three-digit CVC.
+
+The success and cancel URLs are placeholders at example.com.
+The local Payment remains PENDING even after a successful sandbox
+payment: server-side payment confirmation is not implemented yet.
+
+Borrowing creation does not automatically create a payment.
 
 ## Development
 
