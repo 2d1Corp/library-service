@@ -16,3 +16,11 @@ class PaymentSerializer(serializers.ModelSerializer):
             "session_url",
         )
         read_only_fields = fields
+
+
+class PaymentSuccessQuerySerializer(serializers.Serializer):
+    session_id = serializers.CharField(max_length=255)
+
+
+class PaymentCallbackResponseSerializer(serializers.Serializer):
+    detail = serializers.CharField()
